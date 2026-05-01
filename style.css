@@ -51,9 +51,9 @@
   --shadow-lg:   0 16px 48px rgba(0,0,0,0.18);
 
   /* Time grid */
-  --row-h:       52px;
+  --row-h:       56px;
   --time-col-w:  90px;
-  --court-col-w: 120px;
+  --court-col-w: 140px;
   --num-courts:  8;
 }
 
@@ -150,7 +150,7 @@ input, select, textarea { font-family: inherit; }
   font-weight: 500;
   outline: none;
   cursor: pointer;
-  colorscheme: dark;
+  color-scheme: dark;
 }
 
 /* ========== VIEWS ========== */
@@ -228,7 +228,8 @@ input, select, textarea { font-family: inherit; }
   margin: 0 auto;
 }
 .schedule-scroll {
-  overflow-x: auto;
+  overflow: auto;
+  max-height: calc(100vh - var(--nav-h) - 180px);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
   border: 1px solid var(--grey-100);
@@ -253,7 +254,7 @@ input, select, textarea { font-family: inherit; }
   gap: 6px;
   border-right: 1px solid rgba(255,255,255,0.08);
   position: sticky;
-  top: var(--nav-h);
+  top: 0;
   z-index: 10;
 }
 .grid-header:last-child { border-right: none; }
@@ -280,7 +281,7 @@ input, select, textarea { font-family: inherit; }
 /* Slot Cards */
 .slot-card {
   height: var(--row-h);
-  padding: 6px 10px;
+  padding: 8px 12px;
   border-right: 1px solid var(--grey-100);
   border-bottom: 1px solid var(--grey-100);
   display: flex;
@@ -289,6 +290,7 @@ input, select, textarea { font-family: inherit; }
   transition: transform 0.12s, box-shadow 0.12s, background 0.15s;
   position: relative;
   cursor: default;
+  min-width: 0;
 }
 .slot-card:last-child { border-right: none; }
 
@@ -340,14 +342,14 @@ input, select, textarea { font-family: inherit; }
 .status-awaiting .slot-sub   { color: var(--gold-dark); }
 
 .slot-label {
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   font-weight: 600;
   letter-spacing: 0.3px;
   color: var(--grey-600);
   line-height: 1.2;
 }
 .slot-sub {
-  font-size: 0.65rem;
+  font-size: 0.7rem;
   color: var(--grey-400);
   margin-top: 2px;
   overflow: hidden;
