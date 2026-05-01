@@ -1,7 +1,6 @@
 /**
  * PicklePro — Court Reservation System
- * Full interactive frontend logic
- * PHP-compatible: all inputs have id and name attributes
+ * Full interactive frontend logic — PHP backend edition
  */
 
 // =============================================
@@ -21,19 +20,9 @@ const CONFIG = {
 const state = {
   selectedSlots: new Set(),
   currentView: 'booking',
+  bookings: [],       // loaded from PHP
+  courts: {},         // court_number → is_active (from PHP)
 };
-
-// =============================================
-// MOCK DATA — simulates PHP backend responses
-// =============================================
-const mockBookings = [
-  { id: 1, date: getTodayStr(), time: '08:00', court: 2, email: 'mario@email.com', name: 'Mario Reyes', status: 'booked',   receipt: 'https://placehold.co/300x500/1a5c2e/white?text=GCash+Receipt' },
-  { id: 2, date: getTodayStr(), time: '09:00', court: 2, email: 'mario@email.com', name: 'Mario Reyes', status: 'booked',   receipt: 'https://placehold.co/300x500/1a5c2e/white?text=GCash+Receipt' },
-  { id: 3, date: getTodayStr(), time: '10:00', court: 5, email: 'ana@email.com',   name: 'Ana Santos',  status: 'awaiting', receipt: 'https://placehold.co/300x500/c9963a/black?text=GCash+Receipt' },
-  { id: 4, date: getTodayStr(), time: '13:00', court: 1, email: 'ben@email.com',   name: 'Ben Cruz',    status: 'pending',  receipt: null },
-  { id: 5, date: getTodayStr(), time: '14:00', court: 3, email: 'cora@email.com',  name: 'Cora Lim',   status: 'booked',   receipt: 'https://placehold.co/300x500/1a5c2e/white?text=GCash+Receipt' },
-  { id: 6, date: getTodayStr(), time: '16:00', court: 7, email: 'dante@email.com', name: 'Dante Go',   status: 'awaiting', receipt: 'https://placehold.co/300x500/c9963a/black?text=GCash+Receipt' },
-];
 
 // =============================================
 // UTILITY HELPERS
@@ -58,8 +47,10 @@ function parseSlotKey(key) {
 }
 
 function getSlotStatus(court, hour) {
-  const booking = mockBookings.find(b =>
-    b.date === document.getElementById('booking_date').value &&
+  // If the court is disabled, treat it as booked (unavailable)
+  if (state.courts[court] === false) return 'booked';
+
+  const booking = state.bookings.find(b =>
     b.court === court &&
     parseInt(b.time.split(':')[0]) === hour
   );
@@ -68,12 +59,51 @@ function getSlotStatus(court, hour) {
 }
 
 function getBookingName(court, hour) {
-  const booking = mockBookings.find(b =>
-    b.date === document.getElementById('booking_date').value &&
+  const booking = state.bookings.find(b =>
     b.court === court &&
     parseInt(b.time.split(':')[0]) === hour
   );
   return booking ? booking.name : null;
+}
+
+// =============================================
+// PHP API CALLS
+// =============================================
+
+/**
+ * Load bookings for the selected date from the PHP backend.
+ * Updates state.bookings and state.courts, then rebuilds the grid.
+ */
+async function loadBookings(date) {
+  try {
+    const res  = await fetch(`get_bookings.php?date=${encodeURIComponent(date)}`);
+    const data = await res.json();
+
+    if (!data.success) {
+      showToast('Could not load bookings: ' + data.message, 'error');
+      return;
+    }
+
+    state.bookings = data.bookings;
+
+    // Convert courts object keys to integers
+    state.courts = {};
+    for (const [num, active] of Object.entries(data.courts)) {
+      state.courts[parseInt(num)] = active;
+    }
+
+    // Update GCash QR if provided
+    if (data.gcash_qr) {
+      const qrEls = document.querySelectorAll('#gcashQr, .qr-img');
+      qrEls.forEach(el => { el.src = data.gcash_qr; });
+    }
+
+    buildScheduleGrid();
+    buildAdminTable();
+  } catch (err) {
+    console.error('loadBookings error:', err);
+    showToast('Network error loading bookings.', 'error');
+  }
 }
 
 function currencyFormat(amount) {
@@ -358,12 +388,24 @@ function viewReceipt(src, name, date, time, court) {
 }
 
 function approveBooking(id) {
-  const booking = mockBookings.find(b => b.id === id);
-  if (booking) {
-    booking.status = 'booked';
-    buildAdminTable();
-    showToast('Booking approved!', 'success');
-  }
+  fetch('approve_booking.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        // Update local state so the table refreshes immediately
+        const booking = state.bookings.find(b => b.id === id);
+        if (booking) booking.status = 'booked';
+        buildAdminTable();
+        showToast('Booking approved!', 'success');
+      } else {
+        showToast(data.message || 'Could not approve booking.', 'error');
+      }
+    })
+    .catch(() => showToast('Network error.', 'error'));
 }
 
 // =============================================
@@ -405,23 +447,53 @@ function initAdminTabs() {
 }
 
 // =============================================
-// COURT TOGGLES (Settings)
+// COURT TOGGLES (Settings) — synced to PHP
 // =============================================
 function buildCourtToggles() {
   const container = document.querySelector('.court-toggles');
   if (!container) return;
   let html = '';
   for (let i = 1; i <= CONFIG.courts; i++) {
+    const isActive = state.courts[i] !== false; // default true
     html += `
       <div class="court-toggle-row">
         <span class="toggle-name">Court ${i}</span>
         <label class="toggle-switch">
-          <input type="checkbox" name="court_${i}_active" id="court_${i}_active" checked>
+          <input type="checkbox" name="court_${i}_active" id="court_${i}_active"
+                 data-court="${i}" ${isActive ? 'checked' : ''}>
           <span class="toggle-slider"></span>
         </label>
       </div>`;
   }
   container.innerHTML = html;
+
+  // Attach change listeners
+  container.querySelectorAll('input[type="checkbox"]').forEach(toggle => {
+    toggle.addEventListener('change', async () => {
+      const court    = parseInt(toggle.dataset.court);
+      const isActive = toggle.checked;
+
+      try {
+        const res  = await fetch('update_court_status.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ court, is_active: isActive }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          state.courts[court] = isActive;
+          buildScheduleGrid();
+          showToast(`Court ${court} ${isActive ? 'enabled' : 'disabled'}.`, 'success');
+        } else {
+          toggle.checked = !isActive; // revert
+          showToast(data.message || 'Could not update court.', 'error');
+        }
+      } catch {
+        toggle.checked = !isActive;
+        showToast('Network error.', 'error');
+      }
+    });
+  });
 }
 
 // =============================================
@@ -441,59 +513,112 @@ function initDatePicker() {
   const dateInput = document.getElementById('booking_date');
   dateInput.value = getTodayStr();
   dateInput.addEventListener('change', () => {
-    buildScheduleGrid();
+    loadBookings(dateInput.value);
     showToast(`Showing courts for ${dateInput.value}`);
   });
 }
 
 // =============================================
-// FORM SUBMISSION (Demo — no real PHP yet)
+// ADMIN TABLE — uses state.bookings
+// =============================================
+function buildAdminTable() {
+  const tbody = document.getElementById('adminTableBody');
+  const rows = state.bookings.map(b => `
+    <tr>
+      <td>${b.date}</td>
+      <td>${b.time}</td>
+      <td>Court ${b.court}</td>
+      <td>${b.email}</td>
+      <td>${b.name}</td>
+      <td>
+        <span class="status-badge badge-${b.status}">
+          <span class="badge-dot"></span>
+          ${b.status.charAt(0).toUpperCase() + b.status.slice(1)}
+        </span>
+      </td>
+      <td>
+        ${b.receipt
+          ? `<button class="btn-view-receipt" onclick="viewReceipt('${b.receipt}', '${b.name}', '${b.date}', '${b.time}', ${b.court})">View Receipt</button>`
+          : '<span style="color:var(--grey-400);font-size:0.78rem">No receipt</span>'}
+        ${b.status === 'awaiting'
+          ? `<button class="btn-approve" onclick="approveBooking(${b.id})">Approve</button>`
+          : ''}
+      </td>
+    </tr>
+  `).join('');
+  tbody.innerHTML = rows || '<tr><td colspan="7" style="text-align:center;color:var(--grey-400);padding:24px">No bookings for this date.</td></tr>';
+}
+
+// =============================================
+// FORM SUBMISSION — real PHP backend
 // =============================================
 function initBookingForm() {
-  document.getElementById('bookingForm').addEventListener('submit', (e) => {
+  document.getElementById('bookingForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const name = document.getElementById('user_name').value;
-    const email = document.getElementById('user_email').value;
-    const phone = document.getElementById('user_phone').value;
+
+    const name  = document.getElementById('user_name').value.trim();
+    const email = document.getElementById('user_email').value.trim();
+    const phone = document.getElementById('user_phone').value.trim();
 
     if (!name || !email || !phone) {
       showToast('Please fill in all fields', 'error');
       return;
     }
 
-    // Add to mock bookings
-    state.selectedSlots.forEach(key => {
-      const { court, hour } = parseSlotKey(key);
-      mockBookings.push({
-        id: Date.now() + Math.random(),
-        date: document.getElementById('booking_date').value,
-        time: `${String(hour).padStart(2,'0')}:00`,
-        court,
-        email,
-        name,
-        status: 'pending',
-        receipt: document.getElementById('receiptPreview').src || null,
-      });
-    });
+    const formData = new FormData(document.getElementById('bookingForm'));
+    // Ensure the hidden fields are current
+    formData.set('selected_slots', JSON.stringify(Array.from(state.selectedSlots)));
+    formData.set('booking_date',   document.getElementById('booking_date').value);
 
-    closeModal('bookingModal');
-    state.selectedSlots.clear();
-    updateBookingBar();
-    buildScheduleGrid();
-    showToast('🎉 Booking submitted! Awaiting confirmation.', 'success');
+    // Attach the receipt file if one was chosen
+    const receiptFile = document.getElementById('payment_receipt').files[0];
+    if (receiptFile) {
+      formData.set('payment_receipt', receiptFile);
+    }
 
-    document.getElementById('bookingForm').reset();
-    document.getElementById('receiptPreview').classList.add('hidden');
-    document.getElementById('uploadPlaceholder').classList.remove('hidden');
+    const submitBtn = document.querySelector('#bookingForm .btn-primary');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitting…';
+
+    try {
+      const res  = await fetch('submit_booking.php', { method: 'POST', body: formData });
+      const data = await res.json();
+
+      if (data.success) {
+        closeModal('bookingModal');
+        state.selectedSlots.clear();
+        updateBookingBar();
+
+        // Reload bookings from server so the grid reflects the new entries
+        await loadBookings(document.getElementById('booking_date').value);
+
+        showToast('🎉 Booking submitted! Awaiting confirmation.', 'success');
+
+        document.getElementById('bookingForm').reset();
+        document.getElementById('receiptPreview').classList.add('hidden');
+        document.getElementById('uploadPlaceholder').classList.remove('hidden');
+      } else {
+        showToast(data.message || 'Submission failed.', 'error');
+      }
+    } catch (err) {
+      console.error('submit_booking error:', err);
+      showToast('Network error. Please try again.', 'error');
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="16"><polyline points="20 6 9 17 4 12"/></svg>
+        Submit Booking`;
+    }
   });
 }
 
-// Admin QR upload preview
+// Admin QR upload — posts to update_qr.php
 function initAdminQrUpload() {
   const qrInput = document.getElementById('new_gcash_qr');
   const qrPreview = document.getElementById('adminQrPreview');
   if (!qrInput) return;
 
+  // Live preview before save
   qrInput.addEventListener('change', () => {
     const file = qrInput.files[0];
     if (!file) return;
@@ -501,13 +626,39 @@ function initAdminQrUpload() {
     reader.onload = (e) => {
       const img = qrPreview.querySelector('.qr-img');
       if (img) img.src = e.target.result;
-      // Also update the modal QR
       const modalQr = document.getElementById('gcashQr');
       if (modalQr) modalQr.src = e.target.result;
-      showToast('QR preview updated', 'success');
+      showToast('QR preview updated — click "Update QR Code" to save.', 'success');
     };
     reader.readAsDataURL(file);
   });
+
+  // Handle the settings form submit
+  const settingsForm = qrInput.closest('form');
+  if (settingsForm) {
+    settingsForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!qrInput.files[0]) {
+        showToast('Please choose a QR image first.', 'error');
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('new_gcash_qr', qrInput.files[0]);
+
+      try {
+        const res  = await fetch('update_qr.php', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.success) {
+          showToast('GCash QR code saved!', 'success');
+        } else {
+          showToast(data.message || 'Could not save QR.', 'error');
+        }
+      } catch {
+        showToast('Network error saving QR.', 'error');
+      }
+    });
+  }
 }
 
 // =============================================
