@@ -13,40 +13,63 @@ header('Content-Type: application/json');
 require_once 'db_connection.php';
 
 $date = $_GET['date'] ?? date('Y-m-d');
+$all  = isset($_GET['all']) && $_GET['all'] === '1';
 
-// Basic date validation
-if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+// Basic date validation (only when not fetching all)
+if (!$all && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
     http_response_code(400);
     echo json_encode(['success' => false, 'message' => 'Invalid date format.']);
     exit;
 }
 
-// ── Fetch bookings for the requested date ─────────────────────────────────────
+// ── Fetch bookings ────────────────────────────────────────────────────────────
 
-$stmt = $conn->prepare(
-    'SELECT id,
-            DATE_FORMAT(date, "%Y-%m-%d") AS date,
-            TIME_FORMAT(time, "%H:%i")    AS time,
-            court,
-            user_name  AS name,
-            user_email AS email,
-            status,
-            receipt_path AS receipt
-     FROM bookings
-     WHERE date = ?
-     ORDER BY time, court'
-);
-$stmt->bind_param('s', $date);
-$stmt->execute();
-$result   = $stmt->get_result();
-$bookings = [];
-
-while ($row = $result->fetch_assoc()) {
-    $row['id']    = (int) $row['id'];
-    $row['court'] = (int) $row['court'];
-    $bookings[]   = $row;
+if ($all) {
+    // Admin view: return every booking across all dates
+    $result = $conn->query(
+        'SELECT id,
+                DATE_FORMAT(date, "%Y-%m-%d") AS date,
+                TIME_FORMAT(time, "%H:%i")    AS time,
+                court,
+                user_name  AS name,
+                user_email AS email,
+                status,
+                receipt_path AS receipt
+         FROM bookings
+         ORDER BY date DESC, time, court'
+    );
+    $bookings = [];
+    while ($row = $result->fetch_assoc()) {
+        $row['id']    = (int) $row['id'];
+        $row['court'] = (int) $row['court'];
+        $bookings[]   = $row;
+    }
+} else {
+    // Booking grid: return only the selected date
+    $stmt = $conn->prepare(
+        'SELECT id,
+                DATE_FORMAT(date, "%Y-%m-%d") AS date,
+                TIME_FORMAT(time, "%H:%i")    AS time,
+                court,
+                user_name  AS name,
+                user_email AS email,
+                status,
+                receipt_path AS receipt
+         FROM bookings
+         WHERE date = ?
+         ORDER BY time, court'
+    );
+    $stmt->bind_param('s', $date);
+    $stmt->execute();
+    $result   = $stmt->get_result();
+    $bookings = [];
+    while ($row = $result->fetch_assoc()) {
+        $row['id']    = (int) $row['id'];
+        $row['court'] = (int) $row['court'];
+        $bookings[]   = $row;
+    }
+    $stmt->close();
 }
-$stmt->close();
 
 // ── Fetch court active-status ─────────────────────────────────────────────────
 

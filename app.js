@@ -20,7 +20,8 @@ const CONFIG = {
 const state = {
   selectedSlots: new Set(),
   currentView: 'booking',
-  bookings: [],       // loaded from PHP
+  bookings: [],       // bookings for the selected date (schedule grid)
+  allBookings: [],    // all bookings across all dates (admin table)
   courts: {},         // court_number → is_active (from PHP)
 };
 
@@ -102,6 +103,35 @@ async function loadBookings(date) {
     buildAdminTable();
   } catch (err) {
     console.error('loadBookings error:', err);
+    showToast('Network error loading bookings.', 'error');
+  }
+}
+
+/**
+ * Load ALL bookings (no date filter) for the admin dashboard.
+ */
+async function loadAllBookings() {
+  try {
+    const res  = await fetch('get_bookings.php?all=1');
+    const data = await res.json();
+
+    if (!data.success) {
+      showToast('Could not load bookings: ' + data.message, 'error');
+      return;
+    }
+
+    state.allBookings = data.bookings;
+
+    // Also sync courts from this response
+    state.courts = {};
+    for (const [num, active] of Object.entries(data.courts)) {
+      state.courts[parseInt(num)] = active;
+    }
+
+    buildAdminTable();
+    buildCourtToggles();
+  } catch (err) {
+    console.error('loadAllBookings error:', err);
     showToast('Network error loading bookings.', 'error');
   }
 }
@@ -346,38 +376,7 @@ function switchView(view) {
   document.getElementById(`view-${view}`).classList.add('active');
   document.querySelector(`[data-view="${view}"]`).classList.add('active');
 
-  if (view === 'admin') buildAdminTable();
-}
-
-// =============================================
-// ADMIN TABLE
-// =============================================
-function buildAdminTable() {
-  const tbody = document.getElementById('adminTableBody');
-  const rows = mockBookings.map(b => `
-    <tr>
-      <td>${b.date}</td>
-      <td>${b.time}</td>
-      <td>Court ${b.court}</td>
-      <td>${b.email}</td>
-      <td>${b.name}</td>
-      <td>
-        <span class="status-badge badge-${b.status}">
-          <span class="badge-dot"></span>
-          ${b.status.charAt(0).toUpperCase() + b.status.slice(1)}
-        </span>
-      </td>
-      <td>
-        ${b.receipt
-          ? `<button class="btn-view-receipt" onclick="viewReceipt('${b.receipt}', '${b.name}', '${b.date}', '${b.time}', ${b.court})">View Receipt</button>`
-          : '<span style="color:var(--grey-400);font-size:0.78rem">No receipt</span>'}
-        ${b.status === 'awaiting'
-          ? `<button class="btn-approve" onclick="approveBooking(${b.id})">Approve</button>`
-          : ''}
-      </td>
-    </tr>
-  `).join('');
-  tbody.innerHTML = rows;
+  if (view === 'admin') loadAllBookings();
 }
 
 function viewReceipt(src, name, date, time, court) {
@@ -396,9 +395,11 @@ function approveBooking(id) {
     .then(r => r.json())
     .then(data => {
       if (data.success) {
-        // Update local state so the table refreshes immediately
-        const booking = state.bookings.find(b => b.id === id);
-        if (booking) booking.status = 'booked';
+        // Update both booking lists so the table reflects immediately
+        [state.bookings, state.allBookings].forEach(list => {
+          const booking = list.find(b => b.id === id);
+          if (booking) booking.status = 'booked';
+        });
         buildAdminTable();
         showToast('Booking approved!', 'success');
       } else {
@@ -416,14 +417,28 @@ function initAdminFilters() {
   const filter = document.getElementById('statusFilter');
 
   function filterTable() {
-    const query = search.value.toLowerCase();
-    const status = filter.value;
-    const rows = document.querySelectorAll('#adminTableBody tr');
+    const query  = search.value.toLowerCase().trim();
+    const status = filter.value.toLowerCase();
+    const rows   = document.querySelectorAll('#adminTableBody tr');
+
     rows.forEach(row => {
-      const text = row.textContent.toLowerCase();
-      const hasQuery = text.includes(query);
-      const hasStatus = !status || text.includes(status);
-      row.style.display = hasQuery && hasStatus ? '' : 'none';
+      // Match query against name, email, court cell text
+      const name  = (row.cells[4]?.textContent || '').toLowerCase();
+      const email = (row.cells[3]?.textContent || '').toLowerCase();
+      const court = (row.cells[2]?.textContent || '').toLowerCase();
+      const date  = (row.cells[0]?.textContent || '').toLowerCase();
+
+      const matchesQuery = !query ||
+        name.includes(query) ||
+        email.includes(query) ||
+        court.includes(query) ||
+        date.includes(query);
+
+      // Match status using the data-status attribute on the row
+      const rowStatus = row.dataset.status || '';
+      const matchesStatus = !status || rowStatus === status;
+
+      row.style.display = matchesQuery && matchesStatus ? '' : 'none';
     });
   }
 
@@ -519,12 +534,21 @@ function initDatePicker() {
 }
 
 // =============================================
-// ADMIN TABLE — uses state.bookings
+// ADMIN TABLE — uses state.allBookings (all dates)
 // =============================================
 function buildAdminTable() {
   const tbody = document.getElementById('adminTableBody');
-  const rows = state.bookings.map(b => `
-    <tr>
+  const source = state.allBookings && state.allBookings.length
+    ? state.allBookings
+    : state.bookings;
+
+  if (!source.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--grey-400);padding:24px">No bookings found.</td></tr>';
+    return;
+  }
+
+  const rows = source.map(b => `
+    <tr data-status="${b.status}">
       <td>${b.date}</td>
       <td>${b.time}</td>
       <td>Court ${b.court}</td>
@@ -546,7 +570,7 @@ function buildAdminTable() {
       </td>
     </tr>
   `).join('');
-  tbody.innerHTML = rows || '<tr><td colspan="7" style="text-align:center;color:var(--grey-400);padding:24px">No bookings for this date.</td></tr>';
+  tbody.innerHTML = rows;
 }
 
 // =============================================
@@ -701,7 +725,6 @@ function initEventListeners() {
 // =============================================
 document.addEventListener('DOMContentLoaded', () => {
   initDatePicker();
-  buildScheduleGrid();
   buildCourtToggles();
   initUploadZone();
   initEventListeners();
@@ -709,5 +732,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initAdminFilters();
   initBookingForm();
   initAdminQrUpload();
-  buildAdminTable();
+  // Load today's bookings for the schedule grid
+  loadBookings(getTodayStr());
+  // Load all bookings for the admin table
+  loadAllBookings();
 });
