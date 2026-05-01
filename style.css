@@ -228,7 +228,9 @@ input, select, textarea { font-family: inherit; }
   margin: 0 auto;
 }
 .schedule-scroll {
-  overflow-x: auto;
+  overflow: auto;
+  max-height: calc(100vh - var(--nav-h) - 180px);
+
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
   border: 1px solid var(--grey-100);
@@ -253,7 +255,7 @@ input, select, textarea { font-family: inherit; }
   gap: 6px;
   border-right: 1px solid rgba(255,255,255,0.08);
   position: sticky;
-  top: var(--nav-h);
+  top: 0;
   z-index: 10;
 }
 .grid-header:last-child { border-right: none; }
